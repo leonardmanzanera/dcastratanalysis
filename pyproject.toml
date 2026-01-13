@@ -1,0 +1,48 @@
+[project]
+name = "dcastratanalysis"
+version = "1.0.0"
+description = "Moteur d'Optimisation de Stratégies DCA Hybrides - Backtesting vectorisé haute fréquence"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Leonard Manzanera"}
+]
+
+dependencies = [
+    "vectorbt>=0.26.0",
+    "numba>=0.58.0",
+    "optuna>=3.5.0",
+    "pandas-ta>=0.3.14b",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "yfinance>=0.2.36",
+    "matplotlib>=3.8.0",
+    "plotly>=5.18.0",
+    "jupyter>=1.0.0",
+    "ipykernel>=6.28.0",
+    "pytest>=7.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black",
+    "isort",
+    "mypy",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.black]
+line-length = 100
+target-version = ['py310']
+
+[tool.isort]
+profile = "black"
+line_length = 100
