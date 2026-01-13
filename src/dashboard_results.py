@@ -436,10 +436,235 @@ def render_period_comparison(df: pd.DataFrame):
     st.plotly_chart(fig, use_container_width=True)
 
 
+def render_equity_curves(df: pd.DataFrame):
+    """Visualise les courbes d'équité comparées au DCA passif."""
+    st.markdown("## 📈 Courbes d'Évolution du Portefeuille")
+    st.markdown("*Comparez l'évolution de vos stratégies sélectionnées vs le DCA passif*")
+    
+    df_success = df[df["status"] == "success"].copy()
+    
+    # Period selector
+    col1, col2 = st.columns([1, 3])
+    
+    with col1:
+        periods = sorted(df_success["period"].unique())
+        selected_period = st.selectbox("📅 Période", periods, index=len(periods)-1, key="equity_period")
+    
+    df_period = df_success[df_success["period"] == selected_period]
+    
+    # Get Pure_DCA as baseline
+    baseline_name = "Pure_DCA"
+    baseline_row = df_period[df_period["strategy_name"] == baseline_name]
+    
+    if len(baseline_row) == 0:
+        # Fallback: use first conservative strategy
+        baseline_row = df_period[df_period["category"] == "Conservative"].head(1)
+        baseline_name = baseline_row["strategy_name"].values[0] if len(baseline_row) > 0 else None
+    
+    # Strategy selector
+    all_strategies = sorted(df_period["strategy_name"].unique())
+    top_5 = df_period.nlargest(5, "calmar_ratio")["strategy_name"].tolist()
+    
+    # Ensure baseline is in defaults
+    defaults = [s for s in top_5[:3] if s != baseline_name]
+    if baseline_name:
+        defaults = [baseline_name] + defaults[:2]
+    
+    selected_strategies = st.multiselect(
+        "🎯 Sélectionnez les stratégies à visualiser (le DCA passif sera toujours affiché en référence)",
+        options=all_strategies,
+        default=defaults
+    )
+    
+    if not selected_strategies:
+        st.info("👆 Sélectionnez au moins une stratégie")
+        return
+    
+    # Ensure Pure_DCA is always included
+    if baseline_name and baseline_name not in selected_strategies:
+        selected_strategies = [baseline_name] + selected_strategies
+    
+    # Load data for simulation
+    period_map = {"5Y": ("2019-01-01", "2024-01-01"), 
+                  "7Y": ("2017-01-01", "2024-01-01"),
+                  "10Y": ("2014-01-01", "2024-01-01")}
+    
+    start_date, end_date = period_map.get(selected_period, ("2019-01-01", "2024-01-01"))
+    
+    with st.spinner("Chargement des données et simulation..."):
+        try:
+            prices, indicators, is_bull, dates = prepare_simulation_data("SPY", start_date, end_date)
+        except Exception as e:
+            st.error(f"Erreur: {e}")
+            return
+    
+    # Get strategy configs and run simulations
+    strategies_data = {}
+    
+    for strat_name in selected_strategies:
+        try:
+            strat = get_strategy_by_name(strat_name)
+            
+            results = simulate_dca_strategy(
+                prices, indicators, is_bull,
+                strat.monthly_amount, strat.initial_war_chest,
+                strat.enable_rebalancing, strat.rebalance_rsi_trigger,
+                strat.rebalance_profit_trigger, strat.rebalance_pct,
+                strat.use_regime_filter, strat.bear_multiplier_reduction,
+                strat.dca_multiplier, strat.signal_indicator,
+                strat.signal_threshold, strat.cooldown_months
+            )
+            
+            strategies_data[strat_name] = {
+                "equity": results[0],
+                "invested": results[4],
+                "category": strat.category
+            }
+        except Exception as e:
+            st.warning(f"Erreur pour {strat_name}: {e}")
+    
+    if not strategies_data:
+        st.error("Aucune stratégie n'a pu être simulée")
+        return
+    
+    # Create equity curves chart
+    st.markdown("### 📊 Évolution de la Valorisation")
+    
+    fig = go.Figure()
+    
+    colors = {
+        "Conservative": "#94a3b8",
+        "Moderate": "#3b82f6",
+        "Aggressive": "#ef4444",
+        "Adaptive": "#10b981",
+        "RiskManaged": "#f59e0b",
+        "Momentum": "#8b5cf6",
+        "Volatility": "#ec4899",
+        "Hybrid": "#06b6d4",
+        "Mixed": "#6b7280"
+    }
+    
+    for strat_name, data in strategies_data.items():
+        is_baseline = strat_name == baseline_name
+        color = colors.get(data["category"], "#ffffff")
+        
+        fig.add_trace(go.Scatter(
+            x=dates,
+            y=data["equity"],
+            name=strat_name[:40],
+            line=dict(
+                color="#94a3b8" if is_baseline else color,
+                width=3 if is_baseline else 2,
+                dash="dot" if is_baseline else "solid"
+            ),
+            opacity=0.7 if is_baseline else 1.0
+        ))
+    
+    # Add invested amount line
+    invested_cumsum = np.zeros(len(prices))
+    monthly_amount = 500.0
+    for i in range(len(prices)):
+        if i % 21 == 0:  # Approximation mensuelle
+            invested_cumsum[i:] += monthly_amount
+    
+    fig.add_trace(go.Scatter(
+        x=dates,
+        y=invested_cumsum,
+        name="Capital Investi",
+        line=dict(color="#64748b", width=1, dash="dash"),
+        opacity=0.5
+    ))
+    
+    fig.update_layout(
+        template="plotly_dark",
+        height=600,
+        title=f"Évolution du Portefeuille ({selected_period})",
+        xaxis_title="Date",
+        yaxis_title="Valeur (€)",
+        legend=dict(x=0.01, y=0.99, bgcolor="rgba(0,0,0,0.5)"),
+        hovermode="x unified"
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Drawdown comparison
+    st.markdown("### 📉 Comparaison des Drawdowns")
+    
+    fig_dd = go.Figure()
+    
+    for strat_name, data in strategies_data.items():
+        dd = drawdown_series(data["equity"]) * 100
+        is_baseline = strat_name == baseline_name
+        color = colors.get(data["category"], "#ffffff")
+        
+        fig_dd.add_trace(go.Scatter(
+            x=dates,
+            y=-dd,
+            name=strat_name[:40],
+            fill="tozeroy" if is_baseline else None,
+            line=dict(
+                color="#94a3b8" if is_baseline else color,
+                width=2 if is_baseline else 1
+            ),
+            opacity=0.3 if is_baseline else 0.8
+        ))
+    
+    fig_dd.update_layout(
+        template="plotly_dark",
+        height=400,
+        title="Drawdown (perte depuis le plus haut)",
+        xaxis_title="Date",
+        yaxis_title="Drawdown (%)",
+        hovermode="x unified"
+    )
+    
+    st.plotly_chart(fig_dd, use_container_width=True)
+    
+    # Performance table
+    st.markdown("### 📋 Tableau Comparatif")
+    
+    comparison_data = []
+    baseline_final = strategies_data.get(baseline_name, {}).get("equity", [0])[-1] if baseline_name else 0
+    
+    for strat_name, data in strategies_data.items():
+        equity = data["equity"]
+        invested = data["invested"]
+        final = equity[-1] if len(equity) > 0 else 0
+        
+        # Get row from benchmark results
+        row = df_period[df_period["strategy_name"] == strat_name].iloc[0] if len(df_period[df_period["strategy_name"] == strat_name]) > 0 else None
+        
+        comparison_data.append({
+            "Stratégie": strat_name,
+            "Catégorie": data["category"],
+            "Valeur Finale": f"€{final:,.0f}",
+            "vs DCA Passif": f"{((final - baseline_final) / baseline_final * 100):+.1f}%" if baseline_final > 0 and strat_name != baseline_name else "Baseline",
+            "Max Drawdown": f"{row['max_drawdown']:.1f}%" if row is not None else "N/A",
+            "Calmar Ratio": f"{row['calmar_ratio']:.2f}" if row is not None else "N/A",
+            "CAGR": f"{row['cagr']:.1f}%" if row is not None else "N/A"
+        })
+    
+    df_table = pd.DataFrame(comparison_data)
+    st.dataframe(df_table, use_container_width=True, hide_index=True)
+    
+    # Winner announcement
+    if len(strategies_data) > 1 and baseline_name:
+        best_strat = max(
+            [(k, v["equity"][-1]) for k, v in strategies_data.items() if k != baseline_name],
+            key=lambda x: x[1]
+        )
+        
+        if best_strat[1] > baseline_final:
+            gain = best_strat[1] - baseline_final
+            st.success(f"🏆 **Gagnant**: {best_strat[0]} (+€{gain:,.0f} vs DCA passif)")
+        else:
+            st.info(f"📊 Le DCA passif reste le plus performant en valeur absolue sur cette période")
+
+
 def main():
     """Point d'entrée principal."""
     st.markdown('<h1 class="main-header">📊 DCA Strategies Benchmark</h1>', unsafe_allow_html=True)
-    st.markdown("*Analyse comparative de 250 stratégies DCA sur SPY*")
+    st.markdown("*Analyse comparative de 1000 stratégies DCA avancées sur SPY*")
     
     # Load results
     df = run_benchmark_if_needed()
@@ -452,7 +677,7 @@ def main():
         st.header("📑 Navigation")
         page = st.radio(
             "Page",
-            ["Vue d'Ensemble", "Comparaison", "Par Catégorie", "Explorateur", "Par Période"],
+            ["Vue d'Ensemble", "📈 Courbes d'Équité", "Comparaison", "Par Catégorie", "Explorateur", "Par Période"],
             label_visibility="collapsed"
         )
         
@@ -467,6 +692,8 @@ def main():
     # Render selected page
     if page == "Vue d'Ensemble":
         render_overview(df)
+    elif page == "📈 Courbes d'Équité":
+        render_equity_curves(df)
     elif page == "Comparaison":
         render_comparison(df)
     elif page == "Par Catégorie":
