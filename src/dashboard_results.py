@@ -20,7 +20,7 @@ import sys
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from strategies_catalog import get_all_strategies, INDICATOR_NAMES
+from strategies_catalog import get_all_strategies, get_strategy_by_name, INDICATOR_NAMES
 from data_loader import prepare_simulation_data
 from strategy_core import simulate_dca_strategy
 from metrics import compute_all_metrics, drawdown_series
