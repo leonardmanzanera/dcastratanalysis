@@ -115,6 +115,24 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     period26_low = pd.Series(low).rolling(window=26).min()
     df["ICHI_Kijun"] = (period26_high + period26_low) / 2
     
+    # Senkou Span A (Leading Span A): (Tenkan + Kijun) / 2, shifted 26 periods forward
+    df["ICHI_Senkou_A"] = ((df["ICHI_Tenkan"] + df["ICHI_Kijun"]) / 2).shift(26)
+    
+    # Senkou Span B (Leading Span B): (52-period high + 52-period low) / 2, shifted 26 periods
+    period52_high = pd.Series(high).rolling(window=52).max()
+    period52_low = pd.Series(low).rolling(window=52).min()
+    df["ICHI_Senkou_B"] = ((period52_high + period52_low) / 2).shift(26)
+    
+    # Chikou Span (Lagging Span): Close price shifted 26 periods back
+    df["ICHI_Chikou"] = df["Close"].shift(-26)
+    
+    # Cloud Signal: Price above the Cloud (bullish)
+    senkou_max = df[["ICHI_Senkou_A", "ICHI_Senkou_B"]].max(axis=1)
+    senkou_min = df[["ICHI_Senkou_A", "ICHI_Senkou_B"]].min(axis=1)
+    df["ICHI_Above_Cloud"] = (df["Close"] > senkou_max).astype(int)
+    df["ICHI_Below_Cloud"] = (df["Close"] < senkou_min).astype(int)
+    df["ICHI_In_Cloud"] = ((df["Close"] >= senkou_min) & (df["Close"] <= senkou_max)).astype(int)
+    
     # ==================== MOMENTUM INDICATORS ====================
     
     # RSI (Relative Strength Index)
@@ -318,10 +336,81 @@ TICKER_MAPPING = {
     "ETHUSD": "ETH-USD",    # Ethereum
 }
 
+# Currency mappings for non-USD indices
+CURRENCY_MAPPING = {
+    "^FCHI": "EUR",         # CAC40 is in EUR
+    "^GDAXI": "EUR",        # DAX is in EUR
+    "^FTSE": "GBP",         # FTSE100 is in GBP
+    "^N225": "JPY",         # Nikkei is in JPY
+}
+
 
 def get_ticker_symbol(name: str) -> str:
     """Convertit un nom d'indice en symbole yfinance."""
     return TICKER_MAPPING.get(name.upper(), name)
+
+
+def load_with_currency_conversion(
+    ticker: str,
+    start: str,
+    end: str,
+    target_currency: str = "USD",
+    use_cache: bool = True
+) -> pd.DataFrame:
+    """
+    Charge les données OHLCV et applique la conversion de devise si nécessaire.
+    
+    Pour les indices non-USD (CAC40, DAX, FTSE), les prix sont automatiquement
+    convertis en USD en utilisant le taux de change approprié.
+    
+    Args:
+        ticker: Symbole du ticker
+        start: Date de début
+        end: Date de fin
+        target_currency: Devise cible (par défaut USD)
+        use_cache: Utiliser le cache
+    
+    Returns:
+        DataFrame avec prix convertis en devise cible
+    """
+    # Charger les données de l'indice
+    df = load_data(ticker, start, end, use_cache)
+    
+    # Vérifier si une conversion est nécessaire
+    base_currency = CURRENCY_MAPPING.get(ticker)
+    
+    if base_currency is None or base_currency == target_currency:
+        # Pas de conversion nécessaire
+        return df
+    
+    # Déterminer la paire de devises
+    fx_pair = f"{base_currency}{target_currency}=X"
+    
+    print(f"[FX] Conversion {base_currency} → {target_currency}...")
+    
+    try:
+        # Charger le taux de change
+        fx_data = load_data(fx_pair, start, end, use_cache)
+        
+        # Aligner les dates (forward fill pour les jours sans cotation forex)
+        fx_rate = fx_data["Close"].reindex(df.index, method="ffill")
+        
+        # Convertir les colonnes de prix
+        for col in ["Open", "High", "Low", "Close"]:
+            if col in df.columns:
+                df[col] = df[col] * fx_rate
+        
+        # Marquer comme converti
+        df.attrs["converted_from"] = base_currency
+        df.attrs["converted_to"] = target_currency
+        
+        print(f"[FX] Conversion appliquée. Taux moyen: {fx_rate.mean():.4f}")
+        
+    except Exception as e:
+        print(f"[FX] Erreur de conversion: {e}")
+        print(f"[FX] Utilisation des prix en devise d'origine ({base_currency})")
+    
+    return df
 
 
 if __name__ == "__main__":
