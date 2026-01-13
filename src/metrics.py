@@ -120,7 +120,7 @@ def calmar_ratio(
     mdd = max_drawdown(equity_curve)
     
     if mdd == 0:
-        return float('inf') if annual_return > 0 else 0.0
+        return np.inf if annual_return > 0 else 0.0
     
     return annual_return / mdd
 
@@ -229,7 +229,7 @@ def sortino_ratio(
     dd = downside_deviation(returns, target=risk_free_rate / 252)
     
     if dd == 0:
-        return float('inf') if excess_return > 0 else 0.0
+        return np.inf if excess_return > 0 else 0.0
     
     return excess_return / dd
 
@@ -282,7 +282,7 @@ def sharpe_ratio(
     volatility = np.sqrt(variance * 252)
     
     if volatility == 0:
-        return float('inf') if excess_return > 0 else 0.0
+        return np.inf if excess_return > 0 else 0.0
     
     return excess_return / volatility
 

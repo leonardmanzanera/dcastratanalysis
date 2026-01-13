@@ -272,8 +272,11 @@ def prepare_simulation_data(
     # Calculer les indicateurs
     df = compute_indicators(df)
     
-    # Supprimer les NaN (début de série avec SMA 200)
-    df = df.dropna()
+    # Supprimer les NaN uniquement pour les indicateurs essentiels
+    # (ignorer les colonnes avec shift forward comme Ichimoku Chikou)
+    essential_cols = ["Close", "SMA_200", "RSI_14", "MACD_Hist", "BB_Pct", "STOCH_K"]
+    available_cols = [col for col in essential_cols if col in df.columns]
+    df = df.dropna(subset=available_cols)
     
     # Extraire les arrays pour Numba
     prices = df["Close"].values.astype(np.float64)
