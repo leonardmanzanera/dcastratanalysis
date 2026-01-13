@@ -17,7 +17,7 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 import yfinance as yf
-import pandas_ta as ta
+import talib
 
 
 # Configuration du cache
@@ -89,67 +89,68 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
         DataFrame enrichi avec tous les indicateurs
     """
     df = df.copy()
-    close = df["Close"]
-    high = df["High"]
-    low = df["Low"]
+    close = df["Close"].values.astype(float)
+    high = df["High"].values.astype(float)
+    low = df["Low"].values.astype(float)
     
     # ==================== TREND INDICATORS ====================
     
     # Simple Moving Averages
-    df["SMA_50"] = ta.sma(close, length=50)
-    df["SMA_200"] = ta.sma(close, length=200)
+    df["SMA_50"] = talib.SMA(close, timeperiod=50)
+    df["SMA_200"] = talib.SMA(close, timeperiod=200)
     
     # Exponential Moving Averages
-    df["EMA_12"] = ta.ema(close, length=12)
-    df["EMA_26"] = ta.ema(close, length=26)
-    df["EMA_50"] = ta.ema(close, length=50)
+    df["EMA_12"] = talib.EMA(close, timeperiod=12)
+    df["EMA_26"] = talib.EMA(close, timeperiod=26)
+    df["EMA_50"] = talib.EMA(close, timeperiod=50)
     
-    # Ichimoku Cloud
-    ichimoku = ta.ichimoku(high, low, close)
-    if ichimoku is not None and len(ichimoku) == 2:
-        ichimoku_df, _ = ichimoku
-        for col in ichimoku_df.columns:
-            df[f"ICHI_{col}"] = ichimoku_df[col].values
+    # Ichimoku Cloud (manual calculation - TA-Lib doesn't have it)
+    # Tenkan-sen (Conversion Line): (9-period high + 9-period low)/2
+    period9_high = pd.Series(high).rolling(window=9).max()
+    period9_low = pd.Series(low).rolling(window=9).min()
+    df["ICHI_Tenkan"] = (period9_high + period9_low) / 2
+    
+    # Kijun-sen (Base Line): (26-period high + 26-period low)/2
+    period26_high = pd.Series(high).rolling(window=26).max()
+    period26_low = pd.Series(low).rolling(window=26).min()
+    df["ICHI_Kijun"] = (period26_high + period26_low) / 2
     
     # ==================== MOMENTUM INDICATORS ====================
     
     # RSI (Relative Strength Index)
-    df["RSI_14"] = ta.rsi(close, length=14)
+    df["RSI_14"] = talib.RSI(close, timeperiod=14)
     
     # MACD (Moving Average Convergence Divergence)
-    macd = ta.macd(close, fast=12, slow=26, signal=9)
-    if macd is not None:
-        df["MACD"] = macd["MACD_12_26_9"]
-        df["MACD_Signal"] = macd["MACDs_12_26_9"]
-        df["MACD_Hist"] = macd["MACDh_12_26_9"]
+    macd, macd_signal, macd_hist = talib.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
+    df["MACD"] = macd
+    df["MACD_Signal"] = macd_signal
+    df["MACD_Hist"] = macd_hist
     
     # Stochastic Oscillator
-    stoch = ta.stoch(high, low, close, k=14, d=3)
-    if stoch is not None:
-        df["STOCH_K"] = stoch["STOCHk_14_3_3"]
-        df["STOCH_D"] = stoch["STOCHd_14_3_3"]
+    slowk, slowd = talib.STOCH(high, low, close, fastk_period=14, slowk_period=3, slowd_period=3)
+    df["STOCH_K"] = slowk
+    df["STOCH_D"] = slowd
     
     # ==================== VOLATILITY INDICATORS ====================
     
     # ATR (Average True Range)
-    df["ATR_14"] = ta.atr(high, low, close, length=14)
+    df["ATR_14"] = talib.ATR(high, low, close, timeperiod=14)
     
     # Bollinger Bands
-    bbands = ta.bbands(close, length=20, std=2)
-    if bbands is not None:
-        df["BB_Upper"] = bbands["BBU_20_2.0"]
-        df["BB_Middle"] = bbands["BBM_20_2.0"]
-        df["BB_Lower"] = bbands["BBL_20_2.0"]
-        df["BB_Width"] = (df["BB_Upper"] - df["BB_Lower"]) / df["BB_Middle"]
-        df["BB_Pct"] = (close - df["BB_Lower"]) / (df["BB_Upper"] - df["BB_Lower"])
+    bb_upper, bb_middle, bb_lower = talib.BBANDS(close, timeperiod=20, nbdevup=2, nbdevdn=2, matype=0)
+    df["BB_Upper"] = bb_upper
+    df["BB_Middle"] = bb_middle
+    df["BB_Lower"] = bb_lower
+    df["BB_Width"] = (df["BB_Upper"] - df["BB_Lower"]) / df["BB_Middle"]
+    df["BB_Pct"] = (df["Close"] - df["BB_Lower"]) / (df["BB_Upper"] - df["BB_Lower"])
     
     # ==================== MARKET REGIME ====================
     
     # Position relative à SMA 200
-    df["Above_SMA200"] = (close > df["SMA_200"]).astype(int)
+    df["Above_SMA200"] = (df["Close"] > df["SMA_200"]).astype(int)
     
     # Distance à SMA 200 (en %)
-    df["Dist_SMA200_Pct"] = ((close - df["SMA_200"]) / df["SMA_200"]) * 100
+    df["Dist_SMA200_Pct"] = ((df["Close"] - df["SMA_200"]) / df["SMA_200"]) * 100
     
     # ==================== DERIVED SIGNALS ====================
     
@@ -164,8 +165,8 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
                              (df["MACD"].shift(1) >= df["MACD_Signal"].shift(1))).astype(int)
     
     # Bollinger Band signals
-    df["BB_Below_Lower"] = (close < df["BB_Lower"]).astype(int)
-    df["BB_Above_Upper"] = (close > df["BB_Upper"]).astype(int)
+    df["BB_Below_Lower"] = (df["Close"] < df["BB_Lower"]).astype(int)
+    df["BB_Above_Upper"] = (df["Close"] > df["BB_Upper"]).astype(int)
     
     return df
 
@@ -216,7 +217,7 @@ def get_weekly_regime(df: pd.DataFrame) -> np.ndarray:
     })
     
     # Calculate weekly SMA 200
-    weekly["SMA_200_W"] = ta.sma(weekly["Close"], length=200)
+    weekly["SMA_200_W"] = talib.SMA(weekly["Close"].values.astype(float), timeperiod=200)
     weekly["Bull_Weekly"] = weekly["Close"] > weekly["SMA_200_W"]
     
     # Forward fill to daily
